@@ -92,6 +92,17 @@ Rules:
 - Detect variations
 - Detect prices
 - Generate a professional restaurant-style description for each item
+- Remove all currency symbols (£, $, €, ₹, Rs, INR, AED, etc.)
+- Remove commas and spaces
+- return prices as array of strings
+- Never return strings for prices
+
+Examples:
+
+£220 -> 220
+₹349 -> 349
+Rs. 199 -> 199
+$12 -> 12
 
 Description Rules:
 - Generate the description yourself

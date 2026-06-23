@@ -61,7 +61,7 @@ if uploaded_file is not None:
             text = extract_text_from_pdf_menu(pdf_path)
 
         st.session_state["ocr_text"] = text
-
+        print(type(text))
         st.success("OCR Complete")
 
 # ---------------------------
@@ -98,13 +98,22 @@ if (
             if isinstance(obj, list):
                 items.extend(obj)
 
+            elif isinstance(obj, dict):
+                items.append(obj)
+
             idx += end
 
         except Exception:
             idx += 1
 
-    st.session_state["items"] = items
+    st.write("Parsed Items:", len(items))
 
+    if len(items) == 0:
+        st.error("No items parsed")
+        st.code(text[:3000])
+
+    st.session_state["items"] = items
+        
 # ---------------------------
 # SHOW EDITABLE TABLE
 # ---------------------------
@@ -114,19 +123,34 @@ if (
     and "final_df" not in st.session_state
 ):
 
-    st.subheader("Review Extracted Menu")
-
-    df = pd.DataFrame(
-        st.session_state["items"]
-    )
+    df = pd.DataFrame(st.session_state["items"]).copy()
     
-    st.dataframe(df)
+    df["prices"] = df["prices"].apply(
+        lambda x: ", ".join(x)
+        if isinstance(x, list)
+        else str(x)
+    )
+
+    df["variations"] = df["variations"].apply(
+        lambda x: ", ".join(x)
+        if isinstance(x, list)
+        else str(x)
+    )
+        
     edited_df = st.data_editor(
         df,
         num_rows="dynamic",
         width="stretch"
     )
 
+    edited_df["prices"] = edited_df["prices"].apply(
+        lambda x: [p.strip() for p in str(x).split(",") if p.strip()]
+    )
+
+    edited_df["variations"] = edited_df["variations"].apply(
+        lambda x: [v.strip() for v in str(x).split(",") if v.strip()]
+    )
+    
     if st.button("Confirm Menu"):
 
         st.session_state["final_df"] = (
