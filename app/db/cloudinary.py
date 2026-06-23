@@ -2,6 +2,8 @@ import cloudinary
 import cloudinary.uploader
 import os
 from dotenv import load_dotenv
+from uuid import uuid4
+import re
 load_dotenv()
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
@@ -15,11 +17,19 @@ def upload_to_cloudinary(
     food_name
 ):
 
-    public_id = (
+    public_id = re.sub(
+        r"[^a-z0-9_-]",
+        "_",
         food_name
-        .lower()
-        .replace(" ", "_")
     )
+
+    public_id = re.sub(
+        r"_+",
+        "_",
+        public_id
+    )
+    
+    public_id = public_id.strip("_")+ "_" + str(uuid4())[:8]
 
     if image_data["provider"] == "upload":
 
