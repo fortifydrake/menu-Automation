@@ -1,12 +1,17 @@
 import streamlit as st
 import tempfile
 import json
+import os
 import pandas as pd
-from Pdf_text_extraction import extract_text_from_pdf_menu
-from imagesearch import image_search
 from datetime import datetime
+
+# Import modular pipeline
+from pipeline import run_menu_pipeline
+from imagesearch import image_search
 from db.mongo import food_upload
 from db.cloudinary import upload_to_cloudinary
+
+st.set_page_config(page_title="Menu Automation", layout="wide")
 
 st.markdown("""
 <style>
@@ -21,12 +26,12 @@ st.markdown("""
 
 if "selected_images" not in st.session_state:
     st.session_state["selected_images"] = {}
-    
+
 # ---------------------------
 # PAGE TITLE
 # ---------------------------
 
-st.title("Menu Automation From Tshitto")
+st.title("Menu Automation Pipeline")
 
 # ---------------------------
 # PDF UPLOAD
@@ -38,7 +43,7 @@ uploaded_file = st.file_uploader(
 )
 
 # ---------------------------
-# OCR EXTRACTION
+# OCR EXTRACTION & PIPELINE
 # ---------------------------
 
 if uploaded_file is not None:
@@ -46,74 +51,44 @@ if uploaded_file is not None:
     st.success(f"Uploaded: {uploaded_file.name}")
 
     if st.button("Extract Menu"):
+        # Reset items state for fresh extraction
+        if "items" in st.session_state:
+            del st.session_state["items"]
+        if "final_df" in st.session_state:
+            del st.session_state["final_df"]
+        if "master_df" in st.session_state:
+            del st.session_state["master_df"]
 
         with tempfile.NamedTemporaryFile(
             delete=False,
             suffix=".pdf"
         ) as tmp_file:
-
             tmp_file.write(uploaded_file.read())
-
             pdf_path = tmp_file.name
 
-        with st.spinner("Running OCR..."):
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
 
-            text = extract_text_from_pdf_menu(pdf_path)
-
-        st.session_state["ocr_text"] = text
-        print(type(text))
-        st.success("OCR Complete")
-
-# ---------------------------
-# PARSE JSON ONLY ONCE
-# ---------------------------
-
-if (
-    "ocr_text" in st.session_state
-    and "items" not in st.session_state
-):
-
-    text = st.session_state["ocr_text"]
-
-    text = (
-        text.replace("```json", "")
-        .replace("```", "")
-        .strip()
-    )
-
-    items = []
-
-    decoder = json.JSONDecoder()
-
-    idx = 0
-
-    while idx < len(text):
+        def update_ui_progress(msg: str, ratio: float):
+            progress_bar.progress(min(max(ratio, 0.0), 1.0))
+            status_text.info(msg)
 
         try:
+            with st.spinner("Processing pipeline..."):
+                items = run_menu_pipeline(pdf_path, progress_callback=update_ui_progress)
 
-            obj, end = decoder.raw_decode(
-                text[idx:]
-            )
+            st.session_state["items"] = items
+            st.success(f"Pipeline Completed! Extracted {len(items)} items.")
+        except Exception as e:
+            st.error(f"Pipeline Execution Failed: {e}")
+            st.exception(e)
+        finally:
+            if os.path.exists(pdf_path):
+                try:
+                    os.remove(pdf_path)
+                except Exception:
+                    pass
 
-            if isinstance(obj, list):
-                items.extend(obj)
-
-            elif isinstance(obj, dict):
-                items.append(obj)
-
-            idx += end
-
-        except Exception:
-            idx += 1
-
-    st.write("Parsed Items:", len(items))
-
-    if len(items) == 0:
-        st.error("No items parsed")
-        st.code(text[:3000])
-
-    st.session_state["items"] = items
-        
 # ---------------------------
 # SHOW EDITABLE TABLE
 # ---------------------------
@@ -122,46 +97,46 @@ if (
     "items" in st.session_state
     and "final_df" not in st.session_state
 ):
+    st.write(f"Parsed Items Count: {len(st.session_state['items'])}")
 
-    df = pd.DataFrame(st.session_state["items"]).copy()
-    
-    df["prices"] = df["prices"].apply(
-        lambda x: ", ".join(x)
-        if isinstance(x, list)
-        else str(x)
-    )
-
-    df["variations"] = df["variations"].apply(
-        lambda x: ", ".join(x)
-        if isinstance(x, list)
-        else str(x)
-    )
+    if len(st.session_state["items"]) == 0:
+        st.warning("No menu items were extracted. Check log files under `logs/` directory.")
+    else:
+        df = pd.DataFrame(st.session_state["items"]).copy()
         
-    edited_df = st.data_editor(
-        df,
-        num_rows="dynamic",
-        width="stretch"
-    )
+        # Ensure column ordering
+        expected_cols = ["food_item", "category", "description", "variations", "prices"]
+        for col in expected_cols:
+            if col not in df.columns:
+                df[col] = ""
+        df = df[expected_cols]
 
-    edited_df["prices"] = edited_df["prices"].apply(
-        lambda x: [p.strip() for p in str(x).split(",") if p.strip()]
-    )
-
-    edited_df["variations"] = edited_df["variations"].apply(
-        lambda x: [v.strip() for v in str(x).split(",") if v.strip()]
-    )
-    
-    if st.button("Confirm Menu"):
-
-        st.session_state["final_df"] = (
-            edited_df.copy()
+        df["prices"] = df["prices"].apply(
+            lambda x: ", ".join(x) if isinstance(x, list) else str(x)
         )
 
-        st.success(
-            f"Menu Confirmed with {len(edited_df)} items"
+        df["variations"] = df["variations"].apply(
+            lambda x: ", ".join(x) if isinstance(x, list) else str(x)
+        )
+            
+        edited_df = st.data_editor(
+            df,
+            num_rows="dynamic",
+            use_container_width=True
         )
 
-        st.rerun()
+        if st.button("Confirm Menu"):
+            confirmed_df = edited_df.copy()
+            confirmed_df["prices"] = confirmed_df["prices"].apply(
+                lambda x: [p.strip() for p in str(x).split(",") if p.strip()]
+            )
+            confirmed_df["variations"] = confirmed_df["variations"].apply(
+                lambda x: [v.strip() for v in str(x).split(",") if v.strip()]
+            )
+
+            st.session_state["final_df"] = confirmed_df
+            st.success(f"Menu Confirmed with {len(confirmed_df)} items")
+            st.rerun()
 
 # ---------------------------
 # FINAL CONFIRMED MENU
@@ -173,7 +148,7 @@ if "final_df" in st.session_state:
 
     st.dataframe(
         st.session_state["final_df"],
-        width="stretch"
+        use_container_width=True
     )
 
     st.success(
@@ -205,7 +180,6 @@ if "master_df" in st.session_state:
 
     master_df = st.session_state["master_df"]
 
-    
     for row_idx, row in master_df.iterrows():
 
         food_key = row["food_item"].strip().upper()
@@ -221,10 +195,10 @@ if "master_df" in st.session_state:
         ):
 
             total_images = len(
-                row["candidate_images"]
+                row.get("candidate_images", [])
             )
 
-            if row["image_url"]:
+            if row.get("image_url"):
                 total_images += 1
 
             total_images = max(
@@ -240,7 +214,7 @@ if "master_df" in st.session_state:
 
             food_key = row["food_item"].strip().upper()
             
-            all_images = row["candidate_images"]
+            all_images = row.get("candidate_images", [])
 
             for start in range(0, len(all_images), 3):
 
@@ -341,6 +315,7 @@ if "master_df" in st.session_state:
                         del st.session_state["selected_images"][food_key]
 
                     st.rerun()
+
 # -------------------------------
 # FINAL APPROVAL
 # -------------------------------

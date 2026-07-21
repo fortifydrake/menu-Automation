@@ -1,4 +1,4 @@
-from database import food_collection
+from db.mongo import foods
 
 def normalize_food_name(name):
     return (
@@ -14,7 +14,7 @@ def get_food(food_name):
         food_name
     )
 
-    food = food_collection.find_one(
+    food = foods.find_one(
         {
             "normalized_name":
             normalized_name
